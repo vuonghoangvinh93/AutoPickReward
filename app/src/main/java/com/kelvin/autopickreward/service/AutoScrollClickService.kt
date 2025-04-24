@@ -30,6 +30,28 @@ import kotlin.math.max
 import kotlin.math.min
 
 /**
+ * Data class to hold text and its screen position
+ */
+data class TextWithPosition(
+    val text: String,
+    val blocks: List<TextBlock> = emptyList()
+)
+
+/**
+ * Data class to represent a text block with its screen position
+ */
+data class TextBlock(
+    val text: String,
+    val bounds: Rect
+) {
+    val centerX: Int
+        get() = bounds.centerX()
+    
+    val centerY: Int
+        get() = bounds.centerY()
+}
+
+/**
  * Accessibility service that performs auto-scrolling and auto-clicking based on OCR text recognition
  */
 class AutoScrollClickService : AccessibilityService() {
@@ -293,7 +315,20 @@ class AutoScrollClickService : AccessibilityService() {
             Log.d(TAG, "Step 7.1: Checking if text contains click condition: '${settings.conditionForClick}'")
             if (initialText.contains(settings.conditionForClick)) {
                 Log.d(TAG, "Step 7.2: Click condition MET on first check ✓, performing click")
-                performClick(clickPoint.x.toFloat(), clickPoint.y.toFloat())
+                
+                // Try to get the exact position from OCR results
+                val result = captureAndRecognizeTextWithPosition(clickPoint, settings.radiusSearchArea)
+                val matchedPosition = findTextPositionOnScreen(result, settings.conditionForClick)
+                
+                // Use matched position for click if available, otherwise fall back to predefined click point
+                if (matchedPosition != null) {
+                    Log.d(TAG, "Using exact matched text position for click: x=${matchedPosition.first}, y=${matchedPosition.second}")
+                    performClick(matchedPosition.first.toFloat(), matchedPosition.second.toFloat())
+                } else {
+                    Log.d(TAG, "No exact text position found, using predefined click point: x=${clickPoint.x}, y=${clickPoint.y}")
+                    performClick(clickPoint.x.toFloat(), clickPoint.y.toFloat())
+                }
+                
                 return
             }
 
@@ -316,12 +351,24 @@ class AutoScrollClickService : AccessibilityService() {
                 }
                 
                 Log.d(TAG, "Step 7.4: Retry #$retryCount - Capturing screen again")
-                val recognizedText = captureAndRecognizeText(clickPoint, settings.radiusSearchArea)
+                val result = captureAndRecognizeTextWithPosition(clickPoint, settings.radiusSearchArea)
                 
                 Log.d(TAG, "Step 7.5: Retry #$retryCount - Checking for click condition")
-                if (recognizedText.contains(settings.conditionForClick)) {
+                if (result.text.contains(settings.conditionForClick)) {
                     Log.d(TAG, "Step 7.6: Click condition MET on retry #$retryCount ✓, performing click")
-                    performClick(clickPoint.x.toFloat(), clickPoint.y.toFloat())
+                    
+                    // Get the position of the matched text
+                    val matchedPosition = findTextPositionOnScreen(result, settings.conditionForClick)
+                    
+                    // Use matched position for click if available, otherwise fall back to predefined click point
+                    if (matchedPosition != null) {
+                        Log.d(TAG, "Using exact matched text position for click: x=${matchedPosition.first}, y=${matchedPosition.second}")
+                        performClick(matchedPosition.first.toFloat(), matchedPosition.second.toFloat())
+                    } else {
+                        Log.d(TAG, "No exact text position found, using predefined click point: x=${clickPoint.x}, y=${clickPoint.y}")
+                        performClick(clickPoint.x.toFloat(), clickPoint.y.toFloat())
+                    }
+                    
                     return
                 } else {
                     Log.d(TAG, "Step 7.6: Click condition NOT met on retry #$retryCount ✗")
@@ -341,6 +388,163 @@ class AutoScrollClickService : AccessibilityService() {
             Log.e(TAG, "Error during click condition check: ${e.message}")
             e.printStackTrace()
         }
+    }
+
+    /**
+     * Helper method to find the position of text on screen
+     * @return Pair of (x,y) coordinates if found, null otherwise
+     */
+    private fun findTextPositionOnScreen(result: TextWithPosition, targetText: String): Pair<Int, Int>? {
+        try {
+            // Find the text block that contains the target text
+            val matchingBlock = result.blocks.find { it.text.contains(targetText) }
+            
+            if (matchingBlock != null) {
+                // Get center coordinates of the matching text block
+                val centerX = matchingBlock.centerX
+                val centerY = matchingBlock.centerY
+                
+                // Log the position
+                Log.d(TAG, "Exact position of text '$targetText' on screen: x=$centerX, y=$centerY")
+                
+                // Return the coordinates
+                return Pair(centerX, centerY)
+            } else {
+                // Try to approximate position from string indices
+                val startIndex = result.text.indexOf(targetText)
+                if (startIndex >= 0) {
+                    // If we found the text but don't have exact coordinates, 
+                    // we can at least indicate which block might contain it
+                    Log.d(TAG, "Text '$targetText' found at character position $startIndex, but exact screen coordinates unavailable")
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error finding text position: ${e.message}")
+        }
+        
+        return null
+    }
+
+    /**
+     * Captures screen and returns text with position information
+     */
+    private fun captureAndRecognizeTextWithPosition(clickPoint: ClickPoint, radius: Int): TextWithPosition {
+        Log.d(TAG, "Starting text recognition with position info in area around (${clickPoint.x}, ${clickPoint.y}) with radius $radius")
+        
+        // First check the basic parameters
+        if (radius <= 0) {
+            Log.e(TAG, "Invalid radius: $radius. Radius must be positive.")
+            return TextWithPosition("")
+        }
+        
+        val screenWidth = getScreenWidth()
+        val screenHeight = getScreenHeight()
+        
+        if (clickPoint.x <= 0 || clickPoint.y <= 0 || clickPoint.x > screenWidth || clickPoint.y > screenHeight) {
+            Log.e(TAG, "Click point (${clickPoint.x}, ${clickPoint.y}) is outside screen bounds (${screenWidth}x${screenHeight})")
+            return TextWithPosition("")
+        }
+        
+        val root = rootInActiveWindow
+        if (root == null) {
+            Log.e(TAG, "Failed to get rootInActiveWindow, cannot capture screen")
+            return TextWithPosition("")
+        }
+        
+        try {
+            // Define the area to capture with boundary checking
+            val rect = Rect(
+                max(0, clickPoint.x.toInt() - radius),
+                max(0, clickPoint.y.toInt() - radius),
+                min(screenWidth, clickPoint.x.toInt() + radius),
+                min(screenHeight, clickPoint.y.toInt() + radius)
+            )
+            
+            // Create a list to store text blocks with their screen positions
+            val textBlocks = mutableListOf<TextBlock>()
+            
+            // Collect text nodes from accessibility tree with their screen positions
+            collectTextNodesWithPosition(root, rect, textBlocks)
+            
+            // Build the combined text string
+            val combinedText = buildString {
+                for (block in textBlocks) {
+                    append(block.text)
+                    append("\n")
+                }
+                
+                // Also get content descriptions
+                val contentDescriptions = getAllContentDescriptions(root, rect)
+                if (contentDescriptions.isNotEmpty()) {
+                    append(contentDescriptions)
+                }
+            }
+            
+            // Log for debugging
+            Log.d(TAG, "OCR recognition completed with ${textBlocks.size} positioned text blocks")
+            if (textBlocks.isEmpty()) {
+                Log.w(TAG, "No positioned text blocks found - screen coordinates will be unavailable")
+            }
+            
+            return TextWithPosition(combinedText, textBlocks)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error during text recognition with position: ${e.message}")
+            e.printStackTrace()
+            return TextWithPosition("")
+        } finally {
+            // Safely release resources
+            try {
+                Log.d(TAG, "Releasing rootInActiveWindow resources")
+                // The recycle() method is deprecated but still the recommended way to
+                // release AccessibilityNodeInfo resources
+                @Suppress("DEPRECATION")
+                root.recycle()
+            } catch (e: Exception) {
+                Log.e(TAG, "Error releasing root window", e)
+            }
+        }
+    }
+    
+    /**
+     * Collects text nodes with their screen positions from accessibility tree
+     */
+    private fun collectTextNodesWithPosition(node: AccessibilityNodeInfo?, area: Rect, result: MutableList<TextBlock>) {
+        if (node == null) return
+        
+        try {
+            // Get node bounds
+            val nodeBounds = Rect()
+            node.getBoundsInScreen(nodeBounds)
+            
+            // Check if node intersects with our area of interest
+            if (Rect.intersects(nodeBounds, area)) {
+                // Add text if available
+                if (!node.text.isNullOrEmpty()) {
+                    // Create a text block with position
+                    result.add(TextBlock(node.text.toString(), Rect(nodeBounds)))
+                }
+                
+                // Add content description if available
+                if (!node.contentDescription.isNullOrEmpty()) {
+                    result.add(TextBlock(node.contentDescription.toString(), Rect(nodeBounds)))
+                }
+                
+                // Check child nodes
+                for (i in 0 until node.childCount) {
+                    collectTextNodesWithPosition(node.getChild(i), area, result)
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error processing node position: ${e.message}")
+        }
+    }
+
+    /**
+     * Captures the screen and recognizes text within the specified area
+     */
+    private fun captureAndRecognizeText(clickPoint: ClickPoint, radius: Int): String {
+        val result = captureAndRecognizeTextWithPosition(clickPoint, radius)
+        return result.text
     }
 
     /**
@@ -515,124 +719,6 @@ class AutoScrollClickService : AccessibilityService() {
         return null
     }
 
-    /**
-     * Captures the screen and recognizes text within the specified area
-     */
-    private fun captureAndRecognizeText(clickPoint: ClickPoint, radius: Int): String {
-        Log.d(TAG, "Starting text recognition in area around (${clickPoint.x}, ${clickPoint.y}) with radius $radius")
-        
-        // Verify input parameters
-        if (radius <= 0) {
-            Log.e(TAG, "Invalid radius: $radius. Radius must be positive.")
-            return ""
-        }
-        
-        val screenWidth = getScreenWidth()
-        val screenHeight = getScreenHeight()
-        
-        if (clickPoint.x <= 0 || clickPoint.y <= 0 || clickPoint.x > screenWidth || clickPoint.y > screenHeight) {
-            Log.e(TAG, "Click point (${clickPoint.x}, ${clickPoint.y}) is outside screen bounds (${screenWidth}x${screenHeight})")
-            return ""
-        }
-        
-        val root = rootInActiveWindow
-        if (root == null) {
-            Log.e(TAG, "Failed to get rootInActiveWindow, cannot capture screen")
-            return ""
-        }
-        
-        try {
-            // Define the area to capture with boundary checking
-            val rect = Rect(
-                max(0, clickPoint.x.toInt() - radius),
-                max(0, clickPoint.y.toInt() - radius),
-                min(screenWidth, clickPoint.x.toInt() + radius),
-                min(screenHeight, clickPoint.y.toInt() + radius)
-            )
-            
-            val areaWidth = rect.width()
-            val areaHeight = rect.height()
-            
-            Log.d(TAG, "Capture area defined: (${rect.left},${rect.top}) to (${rect.right},${rect.bottom}), " +
-                       "size: ${areaWidth}x${areaHeight}")
-            
-            // Check if the capture area is meaningful
-            if (areaWidth < 10 || areaHeight < 10) {
-                Log.w(TAG, "Capture area is very small, OCR might not work effectively")
-            }
-            
-            // Calculate percentage of screen covered
-            val screenPercentage = (areaWidth.toFloat() * areaHeight.toFloat()) / 
-                                   (screenWidth.toFloat() * screenHeight.toFloat()) * 100
-            Log.d(TAG, "Capture area covers approximately ${String.format("%.1f", screenPercentage)}% of screen")
-            
-            // Get content description of elements in the area if available
-            val startTime = System.currentTimeMillis()
-            val contentDescriptions = getAllContentDescriptions(root, rect)
-            val contentDescrTime = System.currentTimeMillis() - startTime
-            
-            // Use OCR to recognize text in the defined area
-            val ocrStartTime = System.currentTimeMillis()
-            val result = ocrHelper.recognizeText(rect)
-            val ocrTime = System.currentTimeMillis() - ocrStartTime
-            
-            // Log performance metrics
-            Log.d(TAG, "Performance: Content descriptions took ${contentDescrTime}ms, OCR took ${ocrTime}ms")
-            
-            // Combine content descriptions with OCR result for better text recognition
-            val hasContentDescr = contentDescriptions.isNotEmpty()
-            val hasOcrResult = result.isNotEmpty()
-            
-            val combinedResult = if (hasContentDescr) {
-                Log.d(TAG, "Found ${contentDescriptions.lines().count()} additional content descriptions")
-                if (contentDescriptions.length > 100) {
-                    Log.d(TAG, "Content desc sample: ${contentDescriptions.take(100)}...")
-                } else {
-                    Log.d(TAG, "Content descriptions: $contentDescriptions")
-                }
-                "$result\n$contentDescriptions"
-            } else {
-                Log.d(TAG, "No content descriptions found in the area")
-                result
-            }
-            
-            // Log recognition results summary
-            if (hasOcrResult) {
-                Log.d(TAG, "OCR recognized ${result.lines().count()} text lines")
-            } else {
-                Log.w(TAG, "OCR did not recognize any text in the target area")
-            }
-            
-            if (combinedResult.isEmpty()) {
-                Log.w(TAG, "No text or content descriptions found in the area - OCR may have failed")
-            } else {
-                Log.d(TAG, "OCR recognition completed with combined result (${combinedResult.length} chars)")
-                if (combinedResult.length > 200) {
-                    Log.d(TAG, "Sample: ${combinedResult.take(200)}...")
-                } else {
-                    Log.d(TAG, "Full result: $combinedResult")
-                }
-            }
-            
-            return combinedResult
-        } catch (e: Exception) {
-            Log.e(TAG, "Error during text recognition: ${e.message}")
-            e.printStackTrace()
-            return ""
-        } finally {
-            // Safely release resources
-            try {
-                Log.d(TAG, "Releasing rootInActiveWindow resources")
-                // The recycle() method is deprecated but still the recommended way to
-                // release AccessibilityNodeInfo resources
-                @Suppress("DEPRECATION")
-                root.recycle()
-            } catch (e: Exception) {
-                Log.e(TAG, "Error releasing root window", e)
-            }
-        }
-    }
-    
     /**
      * Gets the screen width
      */
