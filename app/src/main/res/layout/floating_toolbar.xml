@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/root_container"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:background="#80000000"
+    android:padding="8dp">
+
+    <ImageButton
+        android:id="@+id/btn_start_stop"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:src="@android:drawable/ic_media_play"
+        android:background="?android:attr/selectableItemBackground"
+        android:contentDescription="@string/start_button" />
+
+    <ImageButton
+        android:id="@+id/btn_create_point"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:src="@android:drawable/ic_input_add"
+        android:background="?android:attr/selectableItemBackground"
+        android:contentDescription="@string/create_point_click_button" />
+
+    <ImageButton
+        android:id="@+id/btn_remove_point"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:src="@android:drawable/ic_delete"
+        android:background="?android:attr/selectableItemBackground"
+        android:contentDescription="@string/remove_point_click_button" />
+
+    <ImageButton
+        android:id="@+id/btn_hide_point"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:src="@android:drawable/ic_menu_view"
+        android:background="?android:attr/selectableItemBackground"
+        android:contentDescription="@string/hide_point_click_button" />
+
+    <ImageButton
+        android:id="@+id/btn_set_position"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:src="@android:drawable/ic_menu_manage"
+        android:background="?android:attr/selectableItemBackground"
+        android:contentDescription="@string/set_position_button" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/radius_search_area_label"
+        android:textColor="#FFFFFF"
+        android:textSize="12sp"
+        android:layout_marginTop="8dp"
+        android:gravity="center_horizontal" />
+
+    <SeekBar
+        android:id="@+id/seek_bar_radius"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:max="300"
+        android:progress="130" />
+
+    <TextView
+        android:id="@+id/tv_radius_value"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="130"
+        android:textColor="#FFFFFF"
+        android:textSize="12sp"
+        android:gravity="center_horizontal" />
+
+</LinearLayout> 

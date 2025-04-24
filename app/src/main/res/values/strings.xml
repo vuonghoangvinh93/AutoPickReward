@@ -1,0 +1,36 @@
+<resources>
+    <string name="app_name">AutoPickReward</string>
+    
+    <!-- Accessibility Service -->
+    <string name="accessibility_service_description">Enable automatic scrolling and clicking for AutoPickReward app</string>
+    
+    <!-- Main Screen -->
+    <string name="condition_for_scroll_label">Condition for Scroll</string>
+    <string name="condition_for_click_label">Condition for Click</string>
+    <string name="delay_for_check_scroll_label">Delay for Check Scroll (seconds)</string>
+    <string name="delay_for_check_click_label">Delay for Check Click (seconds)</string>
+    <string name="timeout_for_check_click_label">Timeout for Check Click (seconds)</string>
+    <string name="direction_for_scroll_label">Direction for Scroll</string>
+    <string name="run_button">RUN</string>
+    
+    <!-- Floating Toolbar -->
+    <string name="start_button">Start</string>
+    <string name="stop_button">Stop</string>
+    <string name="create_point_click_button">Create Point Click</string>
+    <string name="remove_point_click_button">Remove Point Click</string>
+    <string name="hide_point_click_button">Hide Point Click</string>
+    <string name="set_position_button">Set Position</string>
+    <string name="radius_search_area_label">Radius Search Area</string>
+    
+    <!-- Directions -->
+    <string name="direction_up">UP</string>
+    <string name="direction_down">DOWN</string>
+    
+    <!-- Permissions -->
+    <string name="permission_required">Permissions Required</string>
+    <string name="overlay_permission_message">This app needs permission to display over other apps</string>
+    <string name="accessibility_permission_message">This app needs accessibility permission for auto-scroll and auto-click</string>
+    <string name="notification_permission_message">This app needs notification permission to run in background</string>
+    <string name="grant_permission">Grant</string>
+    <string name="cancel">Cancel</string>
+</resources>
