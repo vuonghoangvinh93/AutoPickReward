@@ -24,6 +24,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
+import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.SeekBar
@@ -660,33 +661,47 @@ class FloatingToolbarService : Service() {
                     // If we found the app card in recents
                     if (appNodes.isNotEmpty()) {
                         val targetNode = appNodes[0]
-                        val rect = Rect()
-                        targetNode.getBoundsInScreen(rect)
                         
-                        // Create swipe gesture from the center of the app card upward
-                        val startX = rect.centerX().toFloat()
-                        val startY = rect.centerY().toFloat()
-                        val endY = 0f // Swipe to top
-                        
-                        val swipePath = Path()
-                        swipePath.moveTo(startX, startY)
-                        swipePath.lineTo(startX, endY)
-                        
-                        val gestureBuilder = GestureDescription.Builder()
-                        gestureBuilder.addStroke(GestureDescription.StrokeDescription(swipePath, 0, 300))
-                        
-                        // Perform the swipe
-                        serviceInstance.dispatchGesture(gestureBuilder.build(), object : AccessibilityService.GestureResultCallback() {
-                            override fun onCompleted(gestureDescription: GestureDescription) {
-                                super.onCompleted(gestureDescription)
-                                Log.d("FloatingToolbarService", "Swipe to close app completed")
-                                
-                                // Go back to home after closing
-                                Handler(Looper.getMainLooper()).postDelayed({
-                                    serviceInstance.performGlobalAction(AccessibilityService.GLOBAL_ACTION_HOME)
-                                }, 500)
-                            }
-                        }, null)
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                            // For API 24+, use gesture API to swipe
+                            val rect = Rect()
+                            targetNode.getBoundsInScreen(rect)
+                            
+                            // Create swipe gesture from the center of the app card upward
+                            val startX = rect.centerX().toFloat()
+                            val startY = rect.centerY().toFloat()
+                            val endY = 0f // Swipe to top
+                            
+                            val swipePath = Path()
+                            swipePath.moveTo(startX, startY)
+                            swipePath.lineTo(startX, endY)
+                            
+                            val gestureBuilder = GestureDescription.Builder()
+                            gestureBuilder.addStroke(GestureDescription.StrokeDescription(swipePath, 0, 300))
+                            
+                            // Perform the swipe
+                            serviceInstance.dispatchGesture(gestureBuilder.build(), object : AccessibilityService.GestureResultCallback() {
+                                override fun onCompleted(gestureDescription: GestureDescription) {
+                                    super.onCompleted(gestureDescription)
+                                    Log.d("FloatingToolbarService", "Swipe to close app completed")
+                                    
+                                    // Go back to home after closing
+                                    Handler(Looper.getMainLooper()).postDelayed({
+                                        serviceInstance.performGlobalAction(AccessibilityService.GLOBAL_ACTION_HOME)
+                                    }, 500)
+                                }
+                            }, null)
+                        } else {
+                            // For older API levels, try using ACTION_DISMISS on the node
+                            // or fallback to simply going back to home
+                            val dismissed = targetNode.performAction(AccessibilityNodeInfo.ACTION_DISMISS)
+                            Log.d("FloatingToolbarService", "Attempted to dismiss app card: $dismissed")
+                            
+                            // Go back to home after attempting to dismiss
+                            Handler(Looper.getMainLooper()).postDelayed({
+                                serviceInstance.performGlobalAction(AccessibilityService.GLOBAL_ACTION_HOME)
+                            }, 500)
+                        }
                         
                         // Recycle node after use
                         targetNode.recycle()

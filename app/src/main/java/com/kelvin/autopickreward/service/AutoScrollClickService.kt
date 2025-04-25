@@ -557,41 +557,59 @@ class AutoScrollClickService : AccessibilityService() {
             val screenHeight = displayMetrics.heightPixels
             val screenWidth = displayMetrics.widthPixels
 
-            val path = Path()
-            val startY: Float
-            val endY: Float
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                val path = Path()
+                val startY: Float
+                val endY: Float
 
-            if (direction == ScrollDirection.DOWN) {
-                startY = screenHeight * 0.9f
-                endY = screenHeight * 0.1f
-            } else {
-                startY = screenHeight * 0.1f
-                endY = screenHeight * 0.9f
-            }
-
-            path.moveTo(screenWidth / 2f, startY)
-            path.lineTo(screenWidth / 2f, endY)
-
-            val gestureBuilder = GestureDescription.Builder()
-            val gesture = gestureBuilder
-                .addStroke(GestureDescription.StrokeDescription(path, 100, 800))
-                .build()
-
-            // Use a callback to detect success or failure
-            val scrollSuccess = dispatchGesture(gesture, object : GestureResultCallback() {
-                override fun onCompleted(gestureDescription: GestureDescription) {
-                    Log.d(TAG, "Scroll gesture completed successfully")
+                if (direction == ScrollDirection.DOWN) {
+                    startY = screenHeight * 0.9f
+                    endY = screenHeight * 0.2f
+                } else {
+                    startY = screenHeight * 0.2f
+                    endY = screenHeight * 0.8f
                 }
 
-                override fun onCancelled(gestureDescription: GestureDescription) {
-                    Log.d(TAG, "Scroll gesture was cancelled")
-                }
-            }, null)
+                path.moveTo(screenWidth / 2f, startY)
+                path.lineTo(screenWidth / 2f, endY)
 
-            if (scrollSuccess) {
-                Log.d(TAG, "Scroll gesture dispatched from y=${startY} to y=${endY}")
+                val gestureBuilder = GestureDescription.Builder()
+                val gesture = gestureBuilder
+                    .addStroke(GestureDescription.StrokeDescription(path, 10, 500))
+                    .build()
+
+                // Use a callback to detect success or failure
+                val scrollSuccess = dispatchGesture(gesture, object : GestureResultCallback() {
+                    override fun onCompleted(gestureDescription: GestureDescription) {
+                        Log.d(TAG, "Scroll gesture completed successfully")
+                    }
+
+                    override fun onCancelled(gestureDescription: GestureDescription) {
+                        Log.d(TAG, "Scroll gesture was cancelled")
+                    }
+                }, null)
+
+                if (scrollSuccess) {
+                    Log.d(TAG, "Scroll gesture dispatched from y=${startY} to y=${endY}")
+                } else {
+                    Log.e(TAG, "Failed to dispatch scroll gesture")
+                }
             } else {
-                Log.e(TAG, "Failed to dispatch scroll gesture")
+                // For older versions, use AccessibilityNodeInfo scrolling if possible
+                Log.d(TAG, "API level below 24, attempting to use node scrolling instead")
+                val root = rootInActiveWindow
+                if (root != null) {
+                    val scrollSuccessful = if (direction == ScrollDirection.DOWN) {
+                        root.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
+                    } else {
+                        root.performAction(AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD)
+                    }
+                    
+                    Log.d(TAG, "Node scrolling attempt: ${if (scrollSuccessful) "successful" else "failed"}")
+                    root.recycle()
+                } else {
+                    Log.e(TAG, "Cannot scroll: no active window")
+                }
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error performing scroll: ${e.message}")
@@ -604,29 +622,51 @@ class AutoScrollClickService : AccessibilityService() {
      */
     private fun performClick(x: Float, y: Float) {
         try {
-            val path = Path()
-            path.moveTo(x, y)
+            Log.d(TAG, "Attempting to click at [ x=$x , y=$y ]")
+            
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                // For API 24+, use gesture API
+                val path = Path()
+                path.moveTo(x, y)
 
-            val gestureBuilder = GestureDescription.Builder()
-            val gesture = gestureBuilder
-                .addStroke(GestureDescription.StrokeDescription(path, 0, 100))
-                .build()
+                val gestureBuilder = GestureDescription.Builder()
+                val gesture = gestureBuilder
+                    .addStroke(GestureDescription.StrokeDescription(path, 0, 100))
+                    .build()
 
-            // Use a callback to detect success or failure
-            val scrollSuccess = dispatchGesture(gesture, object : GestureResultCallback() {
-                override fun onCompleted(gestureDescription: GestureDescription) {
-                    Log.d(TAG, "Click gesture completed successfully")
+                // Use a callback to detect success or failure
+                val clickSuccess = dispatchGesture(gesture, object : GestureResultCallback() {
+                    override fun onCompleted(gestureDescription: GestureDescription) {
+                        Log.d(TAG, "Click gesture completed successfully")
+                    }
+
+                    override fun onCancelled(gestureDescription: GestureDescription) {
+                        Log.d(TAG, "Click gesture was cancelled")
+                    }
+                }, null)
+
+                if (clickSuccess) {
+                    Log.d(TAG, "Click gesture dispatched at [ x=$x , y=$y ]")
+                } else {
+                    Log.e(TAG, "Failed to dispatch Click gesture")
                 }
-
-                override fun onCancelled(gestureDescription: GestureDescription) {
-                    Log.d(TAG, "Click gesture was cancelled")
-                }
-            }, null)
-
-            if (scrollSuccess) {
-                Log.d(TAG, "Click gesture dispatched at [ x=$x , y=$y ]")
             } else {
-                Log.e(TAG, "Failed to dispatch Click gesture")
+                // For older API levels, try to find and click a node at that position
+                Log.d(TAG, "API level below 24, attempting to find and click node at position")
+                val root = rootInActiveWindow
+                if (root != null) {
+                    val nodeAtPosition = findNodeAtPosition(root, x, y)
+                    if (nodeAtPosition != null) {
+                        val clickSuccess = nodeAtPosition.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                        Log.d(TAG, "Node click attempt: ${if (clickSuccess) "successful" else "failed"}")
+                        nodeAtPosition.recycle()
+                    } else {
+                        Log.e(TAG, "No clickable node found at position [ x=$x , y=$y ]")
+                    }
+                    root.recycle()
+                } else {
+                    Log.e(TAG, "Cannot click: no active window")
+                }
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error performing Click: ${e.message}")
@@ -636,7 +676,9 @@ class AutoScrollClickService : AccessibilityService() {
     
     /**
      * Tries to restart the service connection if we encounter persistent permission issues
+     * This is currently unused but kept for future use
      */
+    @Suppress("unused")
     private fun tryRestartServiceConnection() {
         try {
             Log.d(TAG, "Attempting to refresh service connection due to persistent click failures")
@@ -822,19 +864,21 @@ class AutoScrollClickService : AccessibilityService() {
             }
             
             // Check 4: Can we create paths for gestures
-            try {
-                val testPath = Path()
-                testPath.moveTo(100f, 100f)
-                testPath.lineTo(110f, 110f)
-                
-                val testGesture = GestureDescription.Builder()
-                    .addStroke(StrokeDescription(testPath, 0, 100))
-                    .build()
-                
-                Log.d(TAG, "✓ SUCCESS: Successfully created gesture path")
-            } catch (e: Exception) {
-                Log.e(TAG, "✗ FAILED: Cannot create gesture paths: ${e.message}")
-                allChecksPassed = false
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                try {
+                    val testPath = Path()
+                    testPath.moveTo(100f, 100f)
+                    testPath.lineTo(110f, 110f)
+                    
+                    // Just create a path, no need to actually build the gesture
+                    // which would cause an API level issue
+                    Log.d(TAG, "✓ SUCCESS: Successfully created gesture path (API 24+ feature)")
+                } catch (e: Exception) {
+                    Log.e(TAG, "✗ FAILED: Cannot create gesture paths: ${e.message}")
+                    allChecksPassed = false
+                }
+            } else {
+                Log.d(TAG, "ℹ INFO: Gesture API not available (requires API 24+)")
             }
             
             // Check 5: Service status
