@@ -563,10 +563,10 @@ class AutoScrollClickService : AccessibilityService() {
 
             if (direction == ScrollDirection.DOWN) {
                 startY = screenHeight * 0.9f
-                endY = screenHeight * 0.1f
+                endY = screenHeight * 0.2f
             } else {
-                startY = screenHeight * 0.1f
-                endY = screenHeight * 0.9f
+                startY = screenHeight * 0.2f
+                endY = screenHeight * 0.8f
             }
 
             path.moveTo(screenWidth / 2f, startY)
@@ -574,7 +574,7 @@ class AutoScrollClickService : AccessibilityService() {
 
             val gestureBuilder = GestureDescription.Builder()
             val gesture = gestureBuilder
-                .addStroke(GestureDescription.StrokeDescription(path, 100, 800))
+                .addStroke(GestureDescription.StrokeDescription(path, 10, 500))
                 .build()
 
             // Use a callback to detect success or failure
