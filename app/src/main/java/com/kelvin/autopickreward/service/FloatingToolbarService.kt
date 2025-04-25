@@ -1,5 +1,7 @@
 package com.kelvin.autopickreward.service
 
+import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.GestureDescription
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -8,6 +10,8 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.graphics.PixelFormat
+import android.graphics.Path
+import android.graphics.Rect
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -175,6 +179,7 @@ class FloatingToolbarService : Service() {
         val btnRemovePoint = floatingView.findViewById<ImageButton>(R.id.btn_remove_point)
         val btnHidePoint = floatingView.findViewById<ImageButton>(R.id.btn_hide_point)
         val btnSetPosition = floatingView.findViewById<ImageButton>(R.id.btn_set_position)
+        val btnStopApp = floatingView.findViewById<ImageButton>(R.id.btn_stop_app)
         val seekBarRadius = floatingView.findViewById<SeekBar>(R.id.seek_bar_radius)
         val tvRadius = floatingView.findViewById<TextView>(R.id.tv_radius_value)
 
@@ -206,6 +211,52 @@ class FloatingToolbarService : Service() {
                 // Then start the service
                 startService()
                 Log.d("FloatingToolbarService", "Start service called, UI updated")
+            }
+        }
+
+        // Stop running app button
+        btnStopApp.setOnClickListener {
+            Log.d("FloatingToolbarService", "Stop app button clicked")
+            
+            // Get the current foreground app package name
+            val serviceInstance = AutoScrollClickService.getInstance()
+            if (serviceInstance != null) {
+                try {
+                    val root = serviceInstance.rootInActiveWindow
+                    if (root != null) {
+                        val foregroundPackage = root.packageName?.toString()
+                        if (foregroundPackage != null && foregroundPackage != "com.kelvin.autopickreward") {
+                            Log.d("FloatingToolbarService", "Attempting to close foreground app: $foregroundPackage")
+                            
+                            // First temporarily disable our event listener to prevent interference
+                            val wasRunning = isServiceRunning
+                            if (wasRunning) {
+                                isServiceRunning = false
+                                updatePlayPauseButton(false)
+                            }
+                            
+                            // Show toast notification
+                            showStatusNotification("Closing app: $foregroundPackage")
+                            
+                            // Use the Accessibility Service to close the app
+                            // Go to recents and perform the swipe gesture
+                            performCloseApp(foregroundPackage)
+                        } else {
+                            showStatusNotification("Cannot close our own app!")
+                            Log.d("FloatingToolbarService", "Cannot close own app or null package")
+                        }
+                        root.recycle()
+                    } else {
+                        showStatusNotification("No foreground app found")
+                        Log.d("FloatingToolbarService", "No root window found")
+                    }
+                } catch (e: Exception) {
+                    Log.e("FloatingToolbarService", "Error closing app: ${e.message}")
+                    showStatusNotification("Error closing app")
+                }
+            } else {
+                showStatusNotification("Accessibility service not available")
+                Log.d("FloatingToolbarService", "Service instance not available")
             }
         }
 
@@ -580,6 +631,79 @@ class FloatingToolbarService : Service() {
             Log.d("FloatingToolbarService", "Blue dot added at position: $x, $y")
         } catch (e: Exception) {
             Log.e("FloatingToolbarService", "Error showing blue dot: ${e.message}")
+        }
+    }
+
+    /**
+     * Uses the accessibility service to close the specified app
+     */
+    private fun performCloseApp(packageName: String) {
+        try {
+            val serviceInstance = AutoScrollClickService.getInstance()
+            if (serviceInstance == null) {
+                Log.e("FloatingToolbarService", "Service instance not available to close app")
+                showStatusNotification("Service not available")
+                return
+            }
+            
+            // Use global action to open recents
+            serviceInstance.performGlobalAction(AccessibilityService.GLOBAL_ACTION_RECENTS)
+            
+            // Wait for recents screen to appear
+            Handler(Looper.getMainLooper()).postDelayed({
+                try {
+                    val root = serviceInstance.rootInActiveWindow ?: return@postDelayed
+                    
+                    // Try to find the app by package name in recents
+                    val appNodes = root.findAccessibilityNodeInfosByText(packageName)
+                    
+                    // If we found the app card in recents
+                    if (appNodes.isNotEmpty()) {
+                        val targetNode = appNodes[0]
+                        val rect = Rect()
+                        targetNode.getBoundsInScreen(rect)
+                        
+                        // Create swipe gesture from the center of the app card upward
+                        val startX = rect.centerX().toFloat()
+                        val startY = rect.centerY().toFloat()
+                        val endY = 0f // Swipe to top
+                        
+                        val swipePath = Path()
+                        swipePath.moveTo(startX, startY)
+                        swipePath.lineTo(startX, endY)
+                        
+                        val gestureBuilder = GestureDescription.Builder()
+                        gestureBuilder.addStroke(GestureDescription.StrokeDescription(swipePath, 0, 300))
+                        
+                        // Perform the swipe
+                        serviceInstance.dispatchGesture(gestureBuilder.build(), object : AccessibilityService.GestureResultCallback() {
+                            override fun onCompleted(gestureDescription: GestureDescription) {
+                                super.onCompleted(gestureDescription)
+                                Log.d("FloatingToolbarService", "Swipe to close app completed")
+                                
+                                // Go back to home after closing
+                                Handler(Looper.getMainLooper()).postDelayed({
+                                    serviceInstance.performGlobalAction(AccessibilityService.GLOBAL_ACTION_HOME)
+                                }, 500)
+                            }
+                        }, null)
+                        
+                        // Recycle node after use
+                        targetNode.recycle()
+                    } else {
+                        // If we can't find the app, go back to home
+                        Log.d("FloatingToolbarService", "Could not find app in recents")
+                        serviceInstance.performGlobalAction(AccessibilityService.GLOBAL_ACTION_HOME)
+                    }
+                    
+                    root.recycle()
+                } catch (e: Exception) {
+                    Log.e("FloatingToolbarService", "Error during app close gesture: ${e.message}")
+                }
+            }, 1000)
+            
+        } catch (e: Exception) {
+            Log.e("FloatingToolbarService", "Error closing app: ${e.message}")
         }
     }
 } 

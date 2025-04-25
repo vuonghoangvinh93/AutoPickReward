@@ -47,6 +47,14 @@
         android:background="?android:attr/selectableItemBackground"
         android:contentDescription="@string/set_position_button" />
 
+    <ImageButton
+        android:id="@+id/btn_stop_app"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:src="@android:drawable/ic_menu_close_clear_cancel"
+        android:background="?android:attr/selectableItemBackground"
+        android:contentDescription="Stop running app" />
+
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"

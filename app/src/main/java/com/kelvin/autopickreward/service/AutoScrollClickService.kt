@@ -574,7 +574,7 @@ class AutoScrollClickService : AccessibilityService() {
 
             val gestureBuilder = GestureDescription.Builder()
             val gesture = gestureBuilder
-                .addStroke(GestureDescription.StrokeDescription(path, 10, 500))
+                .addStroke(GestureDescription.StrokeDescription(path, 100, 600))
                 .build()
 
             // Use a callback to detect success or failure
