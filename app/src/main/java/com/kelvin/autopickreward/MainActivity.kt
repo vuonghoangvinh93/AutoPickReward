@@ -121,8 +121,8 @@ class MainActivity : ComponentActivity() {
 fun MainScreen(onRunClick: (AppSettings) -> Unit) {
     val context = LocalContext.current
     
-    var conditionForScroll by remember { mutableStateOf("") }
-    var conditionForClick by remember { mutableStateOf("") }
+    var conditionForScroll by remember { mutableStateOf("Xu Streamer") }
+    var conditionForClick by remember { mutableStateOf("Lưu") }
     var delayForCheckScroll by remember { mutableStateOf("3") }
     var delayForCheckClick by remember { mutableStateOf("3") }
     var timeoutForCheckClick by remember { mutableStateOf("650") }
