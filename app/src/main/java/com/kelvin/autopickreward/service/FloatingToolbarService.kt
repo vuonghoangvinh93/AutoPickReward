@@ -48,6 +48,9 @@ class FloatingToolbarService : Service() {
         private const val CHANNEL_ID = "FloatingToolbarChannel"
         private var isRunning = false
         private var appSettings: AppSettings? = null
+        
+        // Public getter for isRunning
+        fun isServiceRunning(): Boolean = isRunning
 
         fun updateSettings(settings: AppSettings) {
             appSettings = settings
@@ -71,6 +74,22 @@ class FloatingToolbarService : Service() {
     private var crosshairX = 0
     private var crosshairY = 0
     private var radiusSearchArea = 130
+    
+    // Cache UI elements to avoid repeated findViewById calls
+    private var btnStartStop: ImageButton? = null
+    private var btnCreatePoint: ImageButton? = null
+    private var btnRemovePoint: ImageButton? = null
+    private var btnHidePoint: ImageButton? = null
+    private var btnSetPosition: ImageButton? = null
+    private var btnStopApp: ImageButton? = null
+    private var seekBarRadius: SeekBar? = null
+    private var tvRadius: TextView? = null
+    
+    // Cache notification manager to avoid repeated getSystemService calls
+    private var notificationManager: NotificationManager? = null
+    
+    // Use a single handler for all delayed operations
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     override fun onBind(intent: Intent): IBinder? {
         return null
@@ -90,8 +109,8 @@ class FloatingToolbarService : Service() {
                 "Floating Toolbar Service Channel",
                 NotificationManager.IMPORTANCE_LOW
             )
-            val manager = getSystemService(NotificationManager::class.java)
-            manager.createNotificationChannel(serviceChannel)
+            notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            notificationManager?.createNotificationChannel(serviceChannel)
         }
     }
 
@@ -174,26 +193,26 @@ class FloatingToolbarService : Service() {
     }
 
     private fun setupUI() {
-        // Get UI elements
-        val btnStartStop = floatingView.findViewById<ImageButton>(R.id.btn_start_stop)
-        val btnCreatePoint = floatingView.findViewById<ImageButton>(R.id.btn_create_point)
-        val btnRemovePoint = floatingView.findViewById<ImageButton>(R.id.btn_remove_point)
-        val btnHidePoint = floatingView.findViewById<ImageButton>(R.id.btn_hide_point)
-        val btnSetPosition = floatingView.findViewById<ImageButton>(R.id.btn_set_position)
-        val btnStopApp = floatingView.findViewById<ImageButton>(R.id.btn_stop_app)
-        val seekBarRadius = floatingView.findViewById<SeekBar>(R.id.seek_bar_radius)
-        val tvRadius = floatingView.findViewById<TextView>(R.id.tv_radius_value)
+        // Cache UI elements to avoid repeated findViewById calls
+        btnStartStop = floatingView.findViewById(R.id.btn_start_stop)
+        btnCreatePoint = floatingView.findViewById(R.id.btn_create_point)
+        btnRemovePoint = floatingView.findViewById(R.id.btn_remove_point)
+        btnHidePoint = floatingView.findViewById(R.id.btn_hide_point)
+        btnSetPosition = floatingView.findViewById(R.id.btn_set_position)
+        btnStopApp = floatingView.findViewById(R.id.btn_stop_app)
+        seekBarRadius = floatingView.findViewById(R.id.seek_bar_radius)
+        tvRadius = floatingView.findViewById(R.id.tv_radius_value)
 
         // Set initial values
-        tvRadius.text = radiusSearchArea.toString()
-        seekBarRadius.progress = radiusSearchArea
+        tvRadius?.text = radiusSearchArea.toString()
+        seekBarRadius?.progress = radiusSearchArea
         updatePlayPauseButton(isServiceRunning)
 
         // Setup drag listener for the toolbar
         setupDragListener()
 
         // Setup click listeners
-        btnStartStop.setOnClickListener {
+        btnStartStop?.setOnClickListener {
             Log.d("FloatingToolbarService", "Start/Stop button clicked, current state: ${if (isServiceRunning) "Running" else "Stopped"}")
             
             if (isServiceRunning) {
@@ -215,8 +234,44 @@ class FloatingToolbarService : Service() {
             }
         }
 
+        // Draw Rectangle button functionality
+        btnCreatePoint?.setOnClickListener {
+            if (!isCrosshairVisible) {
+                // Center the crosshair on screen initially
+                val displayMetrics = DisplayMetrics()
+                
+                // Get display metrics using the currently recommended approach
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    // For Android 11+, use the WindowManager's current metrics
+                    val windowMetrics = windowManager.currentWindowMetrics
+                    val bounds = windowMetrics.bounds
+                    crosshairX = bounds.width() / 2
+                    crosshairY = bounds.height() / 2
+                } else {
+                    // For older versions, use the deprecated approach
+                    @Suppress("DEPRECATION")
+                    windowManager.defaultDisplay.getMetrics(displayMetrics)
+                    crosshairX = displayMetrics.widthPixels / 2
+                    crosshairY = displayMetrics.heightPixels / 2
+                }
+                
+                crosshairParams.x = crosshairX
+                crosshairParams.y = crosshairY
+                windowManager.addView(crosshairView, crosshairParams)
+                isCrosshairVisible = true
+                
+                // Setup drag listener for the crosshair
+                setupCrosshairDragListener()
+                
+                // Show a notification
+                showStatusNotification("Rectangle drawing mode activated. Drag to position.")
+            } else {
+                showStatusNotification("Rectangle drawing mode already active")
+            }
+        }
+
         // Stop running app button
-        btnStopApp.setOnClickListener {
+        btnStopApp?.setOnClickListener {
             Log.d("FloatingToolbarService", "Stop app button clicked")
             
             // Get the current foreground app package name
@@ -261,37 +316,7 @@ class FloatingToolbarService : Service() {
             }
         }
 
-        btnCreatePoint.setOnClickListener {
-            if (!isCrosshairVisible) {
-                // Center the crosshair on screen initially
-                val displayMetrics = DisplayMetrics()
-                
-                // Get display metrics using the currently recommended approach
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                    // For Android 11+, use the WindowManager's current metrics
-                    val windowMetrics = windowManager.currentWindowMetrics
-                    val bounds = windowMetrics.bounds
-                    crosshairX = bounds.width() / 2
-                    crosshairY = bounds.height() / 2
-                } else {
-                    // For older versions, use the deprecated approach
-                    @Suppress("DEPRECATION")
-                    windowManager.defaultDisplay.getMetrics(displayMetrics)
-                    crosshairX = displayMetrics.widthPixels / 2
-                    crosshairY = displayMetrics.heightPixels / 2
-                }
-                
-                crosshairParams.x = crosshairX
-                crosshairParams.y = crosshairY
-                windowManager.addView(crosshairView, crosshairParams)
-                isCrosshairVisible = true
-                
-                // Setup drag listener for the crosshair
-                setupCrosshairDragListener()
-            }
-        }
-
-        btnRemovePoint.setOnClickListener {
+        btnRemovePoint?.setOnClickListener {
             if (isCrosshairVisible) {
                 windowManager.removeView(crosshairView)
                 isCrosshairVisible = false
@@ -301,20 +326,28 @@ class FloatingToolbarService : Service() {
                     windowManager.removeView(blueDotView)
                     isBlueDotVisible = false
                 }
+                
+                showStatusNotification("Rectangle removed")
+            } else {
+                showStatusNotification("No rectangle to remove")
             }
         }
 
-        btnHidePoint.setOnClickListener {
+        btnHidePoint?.setOnClickListener {
             if (isCrosshairVisible) {
                 crosshairView.visibility = if (crosshairView.visibility == View.VISIBLE) {
                     View.INVISIBLE
                 } else {
                     View.VISIBLE
                 }
+                
+                showStatusNotification(if (crosshairView.visibility == View.VISIBLE) "Rectangle shown" else "Rectangle hidden")
+            } else {
+                showStatusNotification("No rectangle to hide")
             }
         }
         
-        btnSetPosition.setOnClickListener {
+        btnSetPosition?.setOnClickListener {
             if (isCrosshairVisible) {
                 // Get the exact center coordinates of the crosshair
                 val crosshairCenterX: Float
@@ -329,8 +362,6 @@ class FloatingToolbarService : Service() {
                 crosshairCenterX = (crosshairParams.x + crosshairWidth / 2).toFloat()
                 crosshairCenterY = (crosshairParams.y + crosshairHeight / 2).toFloat()
 
-//                crosshairCenterX = (crosshairParams.x + crosshairWidth * 0.5).toFloat()
-//                crosshairCenterY = (crosshairParams.y + crosshairHeight * ).toFloat()
                 Log.d("CrosshairSize", "crosshairWidth: $crosshairWidth, crosshairHeight $crosshairHeight")
                 // Create a new ClickPoint with the exact center coordinates
                 val exactClickPoint = ClickPoint(crosshairCenterX, crosshairCenterY, true)
@@ -349,15 +380,15 @@ class FloatingToolbarService : Service() {
                 Log.d("FloatingToolbarService", "Exact position set at: $crosshairCenterX, $crosshairCenterY")
             } else {
                 // If crosshair is not visible, show an error message
-                showStatusNotification("Please create a crosshair first")
+                showStatusNotification("Please create a rectangle first")
                 Log.d("FloatingToolbarService", "Cannot set position: crosshair not visible")
             }
         }
 
-        seekBarRadius.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+        seekBarRadius?.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
                 radiusSearchArea = progress
-                tvRadius.text = progress.toString()
+                tvRadius?.text = progress.toString()
             }
 
             override fun onStartTrackingTouch(seekBar: SeekBar) {}
@@ -366,7 +397,7 @@ class FloatingToolbarService : Service() {
     }
 
     private fun setupDragListener() {
-        floatingView.findViewById<View>(R.id.root_container).setOnTouchListener { view, event ->
+        floatingView.findViewById<View>(R.id.root_container)?.setOnTouchListener { view, event ->
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
                     initialX = params.x
@@ -442,7 +473,7 @@ class FloatingToolbarService : Service() {
         AutoScrollClickService.startService()
         
         // Add a backup direct call after a short delay to ensure the service starts
-        Handler(Looper.getMainLooper()).postDelayed({
+        mainHandler.postDelayed({
             try {
                 // Get the service instance directly
                 val serviceInstance = AutoScrollClickService.getInstance()
@@ -493,8 +524,7 @@ class FloatingToolbarService : Service() {
         isServiceRunning = false
         
         // Cancel any pending operations on main thread
-        val handler = Handler(Looper.getMainLooper())
-        handler.removeCallbacksAndMessages(null)
+        mainHandler.removeCallbacksAndMessages(null)
         
         // Remove blue dot indicator if visible
         if (isBlueDotVisible) {
@@ -524,7 +554,7 @@ class FloatingToolbarService : Service() {
         
         // Only show toast if explicitly requested
         if (showToast) {
-            handler.post {
+            mainHandler.post {
                 try {
                     showStatusNotification("Service stopped successfully")
                     Log.d("FloatingToolbarService", "Service stop notification shown")
@@ -539,7 +569,10 @@ class FloatingToolbarService : Service() {
      * Shows a temporary status notification instead of toast
      */
     private fun showStatusNotification(message: String) {
-        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        // Get notification manager if not already cached
+        if (notificationManager == null) {
+            notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        }
         
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val statusChannel = NotificationChannel(
@@ -550,7 +583,7 @@ class FloatingToolbarService : Service() {
             statusChannel.setSound(null, null)
             statusChannel.enableLights(false)
             statusChannel.enableVibration(false)
-            notificationManager.createNotificationChannel(statusChannel)
+            notificationManager?.createNotificationChannel(statusChannel)
         }
         
         val notification = NotificationCompat.Builder(this, "status_channel")
@@ -560,23 +593,50 @@ class FloatingToolbarService : Service() {
             .setAutoCancel(true)
             .build()
         
-        notificationManager.notify(2, notification)
+        notificationManager?.notify(2, notification)
         
         // Auto-cancel after 2 seconds
-        Handler(Looper.getMainLooper()).postDelayed({
-            notificationManager.cancel(2)
+        mainHandler.postDelayed({
+            notificationManager?.cancel(2)
         }, 2000)
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        // Clean up resources
         if (isCrosshairVisible) {
-            windowManager.removeView(crosshairView)
+            try {
+                windowManager.removeView(crosshairView)
+            } catch (e: Exception) {
+                Log.e("FloatingToolbarService", "Error removing crosshair view: ${e.message}")
+            }
         }
         if (isBlueDotVisible) {
-            windowManager.removeView(blueDotView)
+            try {
+                windowManager.removeView(blueDotView)
+            } catch (e: Exception) {
+                Log.e("FloatingToolbarService", "Error removing blue dot view: ${e.message}")
+            }
         }
-        windowManager.removeView(floatingView)
+        try {
+            windowManager.removeView(floatingView)
+        } catch (e: Exception) {
+            Log.e("FloatingToolbarService", "Error removing floating view: ${e.message}")
+        }
+        
+        // Clear references to help garbage collection
+        btnStartStop = null
+        btnCreatePoint = null
+        btnRemovePoint = null
+        btnHidePoint = null
+        btnSetPosition = null
+        btnStopApp = null
+        seekBarRadius = null
+        tvRadius = null
+        notificationManager = null
+        
+        // Cancel any pending operations
+        mainHandler.removeCallbacksAndMessages(null)
     }
 
     // Add a new method to force stop from outside the service if needed
@@ -591,8 +651,7 @@ class FloatingToolbarService : Service() {
     // Update the play/pause button based on running state
     private fun updatePlayPauseButton(isRunning: Boolean) {
         try {
-            val btnStartStop = floatingView.findViewById<ImageButton>(R.id.btn_start_stop)
-            btnStartStop.setImageResource(
+            btnStartStop?.setImageResource(
                 if (isRunning) android.R.drawable.ic_media_pause
                 else android.R.drawable.ic_media_play
             )
@@ -651,7 +710,7 @@ class FloatingToolbarService : Service() {
             serviceInstance.performGlobalAction(AccessibilityService.GLOBAL_ACTION_RECENTS)
             
             // Wait for recents screen to appear
-            Handler(Looper.getMainLooper()).postDelayed({
+            mainHandler.postDelayed({
                 try {
                     val root = serviceInstance.rootInActiveWindow ?: return@postDelayed
                     
@@ -686,7 +745,7 @@ class FloatingToolbarService : Service() {
                                     Log.d("FloatingToolbarService", "Swipe to close app completed")
                                     
                                     // Go back to home after closing
-                                    Handler(Looper.getMainLooper()).postDelayed({
+                                    mainHandler.postDelayed({
                                         serviceInstance.performGlobalAction(AccessibilityService.GLOBAL_ACTION_HOME)
                                     }, 500)
                                 }
@@ -698,7 +757,7 @@ class FloatingToolbarService : Service() {
                             Log.d("FloatingToolbarService", "Attempted to dismiss app card: $dismissed")
                             
                             // Go back to home after attempting to dismiss
-                            Handler(Looper.getMainLooper()).postDelayed({
+                            mainHandler.postDelayed({
                                 serviceInstance.performGlobalAction(AccessibilityService.GLOBAL_ACTION_HOME)
                             }, 500)
                         }

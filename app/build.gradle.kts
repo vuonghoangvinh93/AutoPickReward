@@ -50,12 +50,22 @@ dependencies {
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
     
+    // AppCompat and other AndroidX libraries
+    implementation("androidx.appcompat:appcompat:1.6.1")
+    implementation("androidx.constraintlayout:constraintlayout:2.1.4")
+    implementation("com.google.android.material:material:1.9.0")
+    
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
     
     // ML Kit for text recognition
     implementation("com.google.android.gms:play-services-mlkit-text-recognition:19.0.0")
+    
+    // EmojiCompat
+    implementation("androidx.emoji2:emoji2:1.3.0")
+    implementation("androidx.emoji2:emoji2-views:1.3.0")
+    implementation("androidx.emoji2:emoji2-views-helper:1.3.0")
     
     // Test dependencies
     testImplementation(libs.junit)

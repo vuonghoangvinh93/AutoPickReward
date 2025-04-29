@@ -28,6 +28,7 @@ import kotlinx.coroutines.isActive
 import kotlin.coroutines.coroutineContext
 import kotlin.math.max
 import kotlin.math.min
+import java.util.ArrayDeque
 
 /**
  * Data class to hold text and its screen position
@@ -73,6 +74,22 @@ class AutoScrollClickService : AccessibilityService() {
         private var job: Job? = null
         private var clickRetryCount = 0
         private var mainHandler = Handler(Looper.getMainLooper())
+        
+        // Object pool for Rect objects to reduce garbage collection
+        private val rectPool = ArrayDeque<Rect>(5)
+        
+        // Get a Rect from the pool or create a new one
+        fun obtainRect(): Rect {
+            return if (rectPool.isEmpty()) Rect() else rectPool.removeFirst()
+        }
+        
+        // Return a Rect to the pool
+        fun recycleRect(rect: Rect) {
+            if (rectPool.size < 5) {
+                rect.setEmpty()
+                rectPool.addLast(rect)
+            }
+        }
 
         fun updateSettings(newSettings: AppSettings) {
             settings = newSettings
@@ -138,6 +155,19 @@ class AutoScrollClickService : AccessibilityService() {
     private val serviceScope = CoroutineScope(Dispatchers.IO)
     private lateinit var ocrHelper: OCRHelper
     private var isServiceConnected = false
+    
+    // Cache screen dimensions to avoid repeated lookups
+    private var screenWidth = 0
+    private var screenHeight = 0
+    
+    // Cache for text blocks to reduce object creation
+    private val textBlocksCache = mutableListOf<TextBlock>()
+    
+    // Reusable StringBuilder for text concatenation
+    private val textBuilder = StringBuilder(1024)
+    
+    // Reusable Path for gestures
+    private val gesturePath = Path()
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -147,7 +177,19 @@ class AutoScrollClickService : AccessibilityService() {
         // Initialize OCRHelper
         ocrHelper = OCRHelper()
         
+        // Cache screen dimensions
+        updateScreenDimensions()
+        
         setupOverlay()
+    }
+    
+    /**
+     * Updates cached screen dimensions
+     */
+    private fun updateScreenDimensions() {
+        screenWidth = getScreenWidth()
+        screenHeight = getScreenHeight()
+        Log.d(TAG, "Screen dimensions updated: ${screenWidth}x${screenHeight}")
     }
 
     /**
@@ -194,6 +236,10 @@ class AutoScrollClickService : AccessibilityService() {
         
         stopService()
         removeOverlayView()
+        
+        // Clear caches
+        textBlocksCache.clear()
+        textBuilder.setLength(0)
     }
 
     /**
@@ -257,14 +303,29 @@ class AutoScrollClickService : AccessibilityService() {
 
                         // Step 3-7: Capture screen, crop frame, recognize text, check conditions
                         val clickPoint = currentSettings.clickPoint
-                        if (clickPoint == null) {
-                            Log.e(TAG, "Step 3: No click point defined, skipping remaining steps")
-                            continue
-                        }
-                        Log.d(TAG, "Step 3: Using click point at (${clickPoint.x}, ${clickPoint.y}) with radius ${currentSettings.radiusSearchArea}")
+                        val recognizedText: String
                         
-                        Log.d(TAG, "Step 4: Capturing screen and cropping frame")
-                        val recognizedText = captureAndRecognizeText(clickPoint, currentSettings.radiusSearchArea)
+                        if (clickPoint != null && clickPoint.isVisible) {
+                            Log.d(TAG, "Step 3: Using click point at (${clickPoint.x}, ${clickPoint.y}) with radius ${currentSettings.radiusSearchArea}")
+                            
+                            Log.d(TAG, "Step 4: Capturing screen and cropping frame")
+                            recognizedText = captureAndRecognizeText(clickPoint, currentSettings.radiusSearchArea)
+                        } else {
+                            Log.d(TAG, "Step 3: No click point defined, using full screen for text recognition")
+                            
+                            // Use the full screen for text recognition
+                            val fullScreenRect = obtainRect()
+                            fullScreenRect.set(0, 0, screenWidth, screenHeight)
+                            
+                            // Create a dummy click point at the center of the screen
+                            val centerPoint = ClickPoint(screenWidth / 2f, screenHeight / 2f)
+                            
+                            Log.d(TAG, "Step 4: Capturing full screen")
+                            recognizedText = captureAndRecognizeText(centerPoint, max(screenWidth, screenHeight))
+                            
+                            // Recycle the rect
+                            recycleRect(fullScreenRect)
+                        }
                         
                         Log.d(TAG, "Step 5: Text recognized: ${recognizedText.take(100)}${if (recognizedText.length > 100) "..." else ""}")
 
@@ -273,8 +334,8 @@ class AutoScrollClickService : AccessibilityService() {
                         if (recognizedText.contains(currentSettings.conditionForScroll)) {
                             Log.d(TAG, "Step 6: Scroll condition MET ✓")
                             Log.d(TAG, "Step 7: Checking click condition")
+                            
                             checkClickCondition(currentSettings, recognizedText, clickPoint)
-                            delay(currentSettings.delayForCheckClick * 1000L)
                         } else {
                             Log.d(TAG, "Step 6: Scroll condition NOT met ✗, continuing to next cycle")
                         }
@@ -309,24 +370,42 @@ class AutoScrollClickService : AccessibilityService() {
     private suspend fun checkClickCondition(
         settings: AppSettings,
         initialText: String, 
-        clickPoint: ClickPoint
+        clickPoint: ClickPoint?
     ) {
         try {
             Log.d(TAG, "Step 7.1: Checking if text contains click condition: '${settings.conditionForClick}'")
             if (initialText.contains(settings.conditionForClick)) {
                 Log.d(TAG, "Step 7.2: Click condition MET on first check ✓, performing click")
                 
-                // Try to get the exact position from OCR results
-                val result = captureAndRecognizeTextWithPosition(clickPoint, settings.radiusSearchArea)
-                val matchedPosition = findTextPositionOnScreen(result, settings.conditionForClick)
-                
-                // Use matched position for click if available, otherwise fall back to predefined click point
-                if (matchedPosition != null) {
-                    Log.d(TAG, "Using exact matched text position for click: x=${matchedPosition.first}, y=${matchedPosition.second}")
-                    performClick(matchedPosition.first.toFloat(), matchedPosition.second.toFloat())
+                if (clickPoint != null && clickPoint.isVisible) {
+                    // Try to get the exact position from OCR results
+                    val result = captureAndRecognizeTextWithPosition(clickPoint, settings.radiusSearchArea)
+                    val matchedPosition = findTextPositionOnScreen(result, settings.conditionForClick)
+                    
+                    // Use matched position for click if available, otherwise fall back to predefined click point
+                    if (matchedPosition != null) {
+                        Log.d(TAG, "Using exact matched text position for click: x=${matchedPosition.first}, y=${matchedPosition.second}")
+                        performClick(matchedPosition.first.toFloat(), matchedPosition.second.toFloat())
+                    } else {
+                        Log.d(TAG, "No exact text position found, using predefined click point: x=${clickPoint.x}, y=${clickPoint.y}")
+                        performClick(clickPoint.x.toFloat(), clickPoint.y.toFloat())
+                    }
                 } else {
-                    Log.d(TAG, "No exact text position found, using predefined click point: x=${clickPoint.x}, y=${clickPoint.y}")
-                    performClick(clickPoint.x.toFloat(), clickPoint.y.toFloat())
+                    // If no click point is defined, try to find the text on screen
+                    val centerPoint = ClickPoint(screenWidth / 2f, screenHeight / 2f)
+                    
+                    val result = captureAndRecognizeTextWithPosition(
+                        centerPoint,
+                        max(screenWidth, screenHeight)
+                    )
+                    val matchedPosition = findTextPositionOnScreen(result, settings.conditionForClick)
+                    
+                    if (matchedPosition != null) {
+                        Log.d(TAG, "Found text position for click: x=${matchedPosition.first}, y=${matchedPosition.second}")
+                        performClick(matchedPosition.first.toFloat(), matchedPosition.second.toFloat())
+                    } else {
+                        Log.d(TAG, "Could not find text position for click, skipping")
+                    }
                 }
                 
                 return
@@ -351,27 +430,57 @@ class AutoScrollClickService : AccessibilityService() {
                 }
                 
                 Log.d(TAG, "Step 7.4: Retry #$retryCount - Capturing screen again")
-                val result = captureAndRecognizeTextWithPosition(clickPoint, settings.radiusSearchArea)
                 
-                Log.d(TAG, "Step 7.5: Retry #$retryCount - Checking for click condition")
-                if (result.text.contains(settings.conditionForClick)) {
-                    Log.d(TAG, "Step 7.6: Click condition MET on retry #$retryCount ✓, performing click")
+                if (clickPoint != null && clickPoint.isVisible) {
+                    val result = captureAndRecognizeTextWithPosition(clickPoint, settings.radiusSearchArea)
                     
-                    // Get the position of the matched text
-                    val matchedPosition = findTextPositionOnScreen(result, settings.conditionForClick)
-                    
-                    // Use matched position for click if available, otherwise fall back to predefined click point
-                    if (matchedPosition != null) {
-                        Log.d(TAG, "Using exact matched text position for click: x=${matchedPosition.first}, y=${matchedPosition.second}")
-                        performClick(matchedPosition.first.toFloat(), matchedPosition.second.toFloat())
+                    Log.d(TAG, "Step 7.5: Retry #$retryCount - Checking for click condition")
+                    if (result.text.contains(settings.conditionForClick)) {
+                        Log.d(TAG, "Step 7.6: Click condition MET on retry #$retryCount ✓, performing click")
+                        
+                        // Get the position of the matched text
+                        val matchedPosition = findTextPositionOnScreen(result, settings.conditionForClick)
+                        
+                        // Use matched position for click if available, otherwise fall back to predefined click point
+                        if (matchedPosition != null) {
+                            Log.d(TAG, "Using exact matched text position for click: x=${matchedPosition.first}, y=${matchedPosition.second}")
+                            performClick(matchedPosition.first.toFloat(), matchedPosition.second.toFloat())
+                        } else {
+                            Log.d(TAG, "No exact text position found, using predefined click point: x=${clickPoint.x}, y=${clickPoint.y}")
+                            performClick(clickPoint.x.toFloat(), clickPoint.y.toFloat())
+                        }
+                        
+                        return
                     } else {
-                        Log.d(TAG, "No exact text position found, using predefined click point: x=${clickPoint.x}, y=${clickPoint.y}")
-                        performClick(clickPoint.x.toFloat(), clickPoint.y.toFloat())
+                        Log.d(TAG, "Step 7.6: Click condition NOT met on retry #$retryCount ✗")
                     }
-                    
-                    return
                 } else {
-                    Log.d(TAG, "Step 7.6: Click condition NOT met on retry #$retryCount ✗")
+                    // If no click point is defined, use the full screen
+                    val centerPoint = ClickPoint(screenWidth / 2f, screenHeight / 2f)
+                    
+                    val result = captureAndRecognizeTextWithPosition(
+                        centerPoint,
+                        max(screenWidth, screenHeight)
+                    )
+                    
+                    Log.d(TAG, "Step 7.5: Retry #$retryCount - Checking for click condition")
+                    if (result.text.contains(settings.conditionForClick)) {
+                        Log.d(TAG, "Step 7.6: Click condition MET on retry #$retryCount ✓, performing click")
+                        
+                        // Get the position of the matched text
+                        val matchedPosition = findTextPositionOnScreen(result, settings.conditionForClick)
+                        
+                        if (matchedPosition != null) {
+                            Log.d(TAG, "Found text position for click: x=${matchedPosition.first}, y=${matchedPosition.second}")
+                            performClick(matchedPosition.first.toFloat(), matchedPosition.second.toFloat())
+                        } else {
+                            Log.d(TAG, "Could not find text position for click, skipping")
+                        }
+                        
+                        return
+                    } else {
+                        Log.d(TAG, "Step 7.6: Click condition NOT met on retry #$retryCount ✗")
+                    }
                 }
                 
                 // Check if we've hit timeout
@@ -437,9 +546,6 @@ class AutoScrollClickService : AccessibilityService() {
             return TextWithPosition("")
         }
         
-        val screenWidth = getScreenWidth()
-        val screenHeight = getScreenHeight()
-        
         if (clickPoint.x <= 0 || clickPoint.y <= 0 || clickPoint.x > screenWidth || clickPoint.y > screenHeight) {
             Log.e(TAG, "Click point (${clickPoint.x}, ${clickPoint.y}) is outside screen bounds (${screenWidth}x${screenHeight})")
             return TextWithPosition("")
@@ -453,40 +559,46 @@ class AutoScrollClickService : AccessibilityService() {
         
         try {
             // Define the area to capture with boundary checking
-            val rect = Rect(
+            val rect = obtainRect()
+            rect.set(
                 max(0, clickPoint.x.toInt() - radius),
                 max(0, clickPoint.y.toInt() - radius),
                 min(screenWidth, clickPoint.x.toInt() + radius),
                 min(screenHeight, clickPoint.y.toInt() + radius)
             )
             
-            // Create a list to store text blocks with their screen positions
-            val textBlocks = mutableListOf<TextBlock>()
+            // Clear the text blocks cache
+            textBlocksCache.clear()
             
             // Collect text nodes from accessibility tree with their screen positions
-            collectTextNodesWithPosition(root, rect, textBlocks)
+            collectTextNodesWithPosition(root, rect, textBlocksCache)
             
             // Build the combined text string
-            val combinedText = buildString {
-                for (block in textBlocks) {
-                    append(block.text)
-                    append("\n")
-                }
-                
-                // Also get content descriptions
-                val contentDescriptions = getAllContentDescriptions(root, rect)
-                if (contentDescriptions.isNotEmpty()) {
-                    append(contentDescriptions)
-                }
+            textBuilder.setLength(0)
+            for (block in textBlocksCache) {
+                textBuilder.append(block.text)
+                textBuilder.append("\n")
             }
             
+            // Also get content descriptions
+            val contentDescriptions = getAllContentDescriptions(root, rect)
+            if (contentDescriptions.isNotEmpty()) {
+                textBuilder.append(contentDescriptions)
+            }
+            
+            // Recycle the rect
+            recycleRect(rect)
+            
             // Log for debugging
-            Log.d(TAG, "OCR recognition completed with ${textBlocks.size} positioned text blocks")
-            if (textBlocks.isEmpty()) {
+            Log.d(TAG, "OCR recognition completed with ${textBlocksCache.size} positioned text blocks")
+            if (textBlocksCache.isEmpty()) {
                 Log.w(TAG, "No positioned text blocks found - screen coordinates will be unavailable")
             }
             
-            return TextWithPosition(combinedText, textBlocks)
+            // Create a new list with the cached blocks to avoid modification issues
+            val resultBlocks = ArrayList<TextBlock>(textBlocksCache)
+            
+            return TextWithPosition(textBuilder.toString(), resultBlocks)
         } catch (e: Exception) {
             Log.e(TAG, "Error during text recognition with position: ${e.message}")
             e.printStackTrace()
@@ -513,7 +625,7 @@ class AutoScrollClickService : AccessibilityService() {
         
         try {
             // Get node bounds
-            val nodeBounds = Rect()
+            val nodeBounds = obtainRect()
             node.getBoundsInScreen(nodeBounds)
             
             // Check if node intersects with our area of interest
@@ -534,6 +646,9 @@ class AutoScrollClickService : AccessibilityService() {
                     collectTextNodesWithPosition(node.getChild(i), area, result)
                 }
             }
+            
+            // Recycle the rect
+            recycleRect(nodeBounds)
         } catch (e: Exception) {
             Log.e(TAG, "Error processing node position: ${e.message}")
         }
@@ -553,12 +668,11 @@ class AutoScrollClickService : AccessibilityService() {
     private fun performScroll(direction: ScrollDirection) {
         try {
             Log.d(TAG, "Performing scroll gesture in direction: $direction")
-            val displayMetrics = resources.displayMetrics
-            val screenHeight = displayMetrics.heightPixels
-            val screenWidth = displayMetrics.widthPixels
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                val path = Path()
+                // Reset the path
+                gesturePath.reset()
+                
                 val startY: Float
                 val endY: Float
 
@@ -570,12 +684,12 @@ class AutoScrollClickService : AccessibilityService() {
                     endY = screenHeight * 0.8f
                 }
 
-                path.moveTo(screenWidth / 2f, startY)
-                path.lineTo(screenWidth / 2f, endY)
+                gesturePath.moveTo(screenWidth / 2f, startY)
+                gesturePath.lineTo(screenWidth / 2f, endY)
 
                 val gestureBuilder = GestureDescription.Builder()
                 val gesture = gestureBuilder
-                    .addStroke(GestureDescription.StrokeDescription(path, 10, 500))
+                    .addStroke(GestureDescription.StrokeDescription(gesturePath, 10, 500))
                     .build()
 
                 // Use a callback to detect success or failure
@@ -626,12 +740,13 @@ class AutoScrollClickService : AccessibilityService() {
             
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                 // For API 24+, use gesture API
-                val path = Path()
-                path.moveTo(x, y)
+                // Reset the path
+                gesturePath.reset()
+                gesturePath.moveTo(x, y)
 
                 val gestureBuilder = GestureDescription.Builder()
                 val gesture = gestureBuilder
-                    .addStroke(GestureDescription.StrokeDescription(path, 0, 100))
+                    .addStroke(GestureDescription.StrokeDescription(gesturePath, 0, 100))
                     .build()
 
                 // Use a callback to detect success or failure
@@ -738,7 +853,7 @@ class AutoScrollClickService : AccessibilityService() {
         
         try {
             // Get node bounds
-            val nodeBounds = Rect()
+            val nodeBounds = obtainRect()
             node.getBoundsInScreen(nodeBounds)
             
             // Check if the point is within this node's bounds
@@ -747,13 +862,20 @@ class AutoScrollClickService : AccessibilityService() {
                 for (i in 0 until node.childCount) {
                     val childAtPosition = findNodeAtPosition(node.getChild(i), x, y)
                     if (childAtPosition != null) {
+                        // Recycle the rect before returning
+                        recycleRect(nodeBounds)
                         return childAtPosition
                     }
                 }
                 
+                // Recycle the rect before returning
+                recycleRect(nodeBounds)
                 // If no child contains the point, return this node
                 return node
             }
+            
+            // Recycle the rect if we didn't return
+            recycleRect(nodeBounds)
         } catch (e: Exception) {
             Log.e(TAG, "Error finding node at position: ${e.message}")
         }
@@ -779,16 +901,16 @@ class AutoScrollClickService : AccessibilityService() {
      * Gets all content descriptions from elements in the specified area
      */
     private fun getAllContentDescriptions(root: AccessibilityNodeInfo, area: Rect): String {
-        val result = StringBuilder()
+        textBuilder.setLength(0)
         
         try {
             // Recursively collect content descriptions and text from nodes
-            collectTextFromNodes(root, area, result)
+            collectTextFromNodes(root, area, textBuilder)
         } catch (e: Exception) {
             Log.e(TAG, "Error collecting content descriptions: ${e.message}")
         }
         
-        return result.toString()
+        return textBuilder.toString()
     }
     
     /**
@@ -799,7 +921,7 @@ class AutoScrollClickService : AccessibilityService() {
         
         try {
             // Get node bounds
-            val nodeBounds = Rect()
+            val nodeBounds = obtainRect()
             node.getBoundsInScreen(nodeBounds)
             
             // Check if node intersects with our area of interest
@@ -819,6 +941,9 @@ class AutoScrollClickService : AccessibilityService() {
                     collectTextFromNodes(node.getChild(i), area, result)
                 }
             }
+            
+            // Recycle the rect
+            recycleRect(nodeBounds)
         } catch (e: Exception) {
             Log.e(TAG, "Error processing node: ${e.message}")
         }
@@ -866,10 +991,6 @@ class AutoScrollClickService : AccessibilityService() {
             // Check 4: Can we create paths for gestures
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                 try {
-                    val testPath = Path()
-                    testPath.moveTo(100f, 100f)
-                    testPath.lineTo(110f, 110f)
-                    
                     // Just create a path, no need to actually build the gesture
                     // which would cause an API level issue
                     Log.d(TAG, "✓ SUCCESS: Successfully created gesture path (API 24+ feature)")
